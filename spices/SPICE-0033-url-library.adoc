@@ -98,14 +98,16 @@ To change a path without encoding it first, `resolve()` can be used, as it is as
 /// ```
 class Url {
   /// The scheme, without the trailing `:`, or [null] if this is a relative reference.
-  ///
-  /// [Url()] lowercases this, as schemes are case-insensitive.
   scheme: String(isValidScheme(this))? // <1>
 
   /// The percent-encoded userinfo, without the trailing `@`, or [null] if this URL has none.
   ///
   /// Only a URL with a [rawHost] can have userinfo.
   rawUserInfo: String(rawHost != null, isValidUserInfo(this))? // <1>
+
+  /// The percent-decoded [rawUserInfo].
+  hidden fixed userInfo: String? = // <2>
+    if (rawUserInfo != null) decodeUrlComponent(rawUserInfo) else null
 
   /// The percent-encoded host, or [null] if this URL has no authority.
   ///
@@ -116,6 +118,9 @@ class Url {
   /// It may carry a zone identifier, as described in RFC 6874.
   /// Anything else is a registered name, which cannot contain `[`, `]` or `:` literally.
   rawHost: String(isValidHost(this))? // <1>
+
+  /// The percent-decoded [rawHost].
+  hidden fixed host: String? = if (rawHost != null) decodeUrlComponent(rawHost) else null // <2>
 
   /// The port, or [null] if this URL states none.
   ///
@@ -129,34 +134,13 @@ class Url {
   ///
   /// To change the path without encoding it first, use [resolve()], which is as lenient as [Url()].
   /// Unlike amending, this drops [rawQuery] and [rawFragment].
-  ///
-  /// Facts:
-  /// ```
-  /// net.Url("https://example.com/a?q=1#f").resolve("/b c").toString() == "https://example.com/b%20c"
-  /// ```
   rawPath: String(isValidPath(this, rawHost != null)) = "" // <1>
-
-  /// The percent-encoded query, without the leading `?`, or [null] if this URL has none.
-  ///
-  /// The empty string is a URL ending in a bare `?`.
-  rawQuery: String(isValidQuery(this))? // <1>
-
-  /// The percent-encoded fragment, without the leading `#`, or [null] if this URL has none.
-  ///
-  /// The empty string is a URL ending in a bare `#`.
-  rawFragment: String(isValidFragment(this))? // <1>
-
-  /// The percent-decoded [rawUserInfo].
-  hidden fixed userInfo: String? = // <2>
-    if (rawUserInfo != null) decodeUrlComponent(rawUserInfo) else null
-
-  /// The percent-decoded [rawHost].
-  hidden fixed host: String? = if (rawHost != null) decodeUrlComponent(rawHost) else null // <2>
 
   /// The percent-decoded [rawPath].
   ///
-  /// An encoded `/` is decoded like any other octet, so it cannot be told apart from a `/` that
-  /// separates segments; [pathSegments] keeps the two apart.
+  /// An encoded `/` is decoded like any other octet, so it cannot be distinguished from a `/` that
+  /// separates segments.
+  /// [pathSegments] disambiguates between separator and literal `/` characters.
   ///
   /// Facts:
   /// ```
@@ -165,18 +149,31 @@ class Url {
   /// ```
   hidden fixed path: String = decodeUrlComponent(rawPath) // <2>
 
+  /// The percent-encoded query, without the leading `?`, or [null] if this URL has none.
+  ///
+  /// The empty string is a URL ending in a bare `?`.
+  rawQuery: String(isValidQuery(this))? // <1>
+
   /// The percent-decoded [rawQuery].
   ///
   /// Unlike [queryParameters], this does not read [rawQuery] as
   /// `application/x-www-form-urlencoded`, so a `+` is kept as is.
   hidden fixed query: String? = if (rawQuery != null) decodeUrlComponent(rawQuery) else null // <2>
 
+  /// The percent-encoded fragment, without the leading `#`, or [null] if this URL has none.
+  ///
+  /// The empty string is a URL ending in a bare `#`.
+  rawFragment: String(isValidFragment(this))? // <1>
+
   /// The percent-decoded [rawFragment].
   hidden fixed fragment: String? = // <2>
     if (rawFragment != null) decodeUrlComponent(rawFragment) else null
 
+  /// The serialization of this URL.
+  fixed stringValue: String = toString() // <3>
+
   /// Tells if this URL is absolute, that is, has a non-null scheme.
-  hidden fixed isAbsolute: Boolean = scheme != null // <3>
+  hidden fixed isAbsolute: Boolean = scheme != null // <4>
 
   /// Tells if this URL's path is absolute, that is, starts with `/`.
   hidden fixed hasAbsolutePath: Boolean = rawPath.startsWith("/")
@@ -215,13 +212,18 @@ class Url {
 
   /// The percent-decoded segments of [rawPath].
   ///
+  /// [pathSegments] does not tell if the path is absolute or not.
+  /// A relative URL reference `"a/b"` also has path segments `List("a", "b")`.
+  /// To disambiguate between the two, use [hasAbsolutePath].
+  ///
   /// Facts:
   /// ```
   /// net.Url("https://example.com/a/b%20c").pathSegments == List("a", "b c")
+  /// net.Url("https://example.com/a/b%2Fc").pathSegments == List("a", "b/c")
   /// ```
   external fixed pathSegments: List<String>
 
-  /// The percent-decoded parameters of [rawQuery], or an empty mapping if this URL has no query.
+  /// The percent-decoded parameters of [rawQuery], or `null` if this URL has no query.
   ///
   /// [rawQuery] is read as `application/x-www-form-urlencoded`.
   /// A name that repeats holds the values of all its occurrences, in the order they are written.
@@ -231,9 +233,10 @@ class Url {
   /// Facts:
   /// ```
   /// net.Url("https://example.com/?q=a+b&q=c").queryParameters["q"] == new Listing { "a b"; "c" }
-  /// net.Url("https://example.com/").queryParameters.isEmpty
+  /// net.Url("https://example.com/?").queryParameters.isEmpty
+  /// net.Url("https://example.com/").queryParameters == null
   /// ```
-  external fixed queryParameters: Mapping<String, Listing<String>>
+  external fixed queryParameters: Mapping<String, Listing<String>>?
 
   /// Resolves [ref] against this URL.
   ///
@@ -251,8 +254,8 @@ class Url {
   /// ```
   external function resolve(ref: String | Url): Url
 
-  /// Returns this URL in the *syntax-based normalization* of
-  /// [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-6.2.2).
+  /// Returns this URL in the *syntax-based normalization* as described in
+  /// [section 6.2.2](https://www.rfc-editor.org/info/rfc3986/#section-6.2.2) of RFC-3986.
   ///
   /// [scheme] and [rawHost] are lowercased, as they are case-insensitive.
   /// Percent-encoding is normalized: an octet standing for an unreserved character is decoded, and
@@ -261,10 +264,8 @@ class Url {
   /// Dot segments (`./` and `../`) are only removed from an absolute [rawPath].
   /// A URL with a [rawHost] and no path is given the path `/`, which names the same resource.
   ///
-  /// Normalization that would require knowing the scheme is not performed.
-  ///
-  /// Two URLs identify the same resource exactly when their normalizations are equal; this is what
-  /// [equals()] compares.
+  /// Does not perform *scheme-based normalization* as described in
+  /// [section 6.2.3](https://www.rfc-editor.org/info/rfc3986/#section-6.2.3).
   ///
   /// Facts:
   /// ```
@@ -274,15 +275,12 @@ class Url {
   /// ```
   external function normalize(): Url
 
-  /// Whether [other] identifies the same resource as this URL.
+  /// Tells whether this url is equal to [other] according to *syntax-based normalization* as
+  /// described in [section 6.2.2](https://www.rfc-editor.org/info/rfc3986/#section-6.2.2) of
+  /// RFC-3986.
   ///
-  /// Unlike `==`, this compares Urls as the *syntax-based normalization* of RFC 3986:
-  /// [scheme] and [rawHost] are case-insensitive and percent-encoding is normalized.
-  /// An octet standing for a reserved character is kept as written.
-  ///
-  /// Dot segments (`./` and `../`) are only removed from an absolute [rawPath].
-  ///
-  /// Normalization that would require knowing the scheme is not performed.
+  /// This will return [true] if the [normalized][normalize] versions of [this] and [other] are the
+  /// same, and [false] otherwise.
   ///
   /// Facts:
   /// ```
@@ -302,29 +300,30 @@ class Url {
   /// ```
   external function toString(): String
 
-  /// Whether [value] is a percent-encoded `userinfo`.
+  /// Tells if [value] is a percent-encoded `userinfo`.
   external function isValidUserInfo(value: String): Boolean
 
-  /// Whether [value] is a `scheme`.
+  /// Tells if [value] is a `scheme`.
   external function isValidScheme(value: String): Boolean
 
-  /// Whether [value] is a percent-encoded `host`.
+  /// Tells if [value] is a percent-encoded `host`.
   external function isValidHost(value: String): Boolean
 
-  /// Whether [value] is a percent-encoded path that can sit next to an authority, or, when
+  /// Tells if [value] is a percent-encoded path that can sit next to an authority, or, when
   /// [hasAuthority] is [false], next to no authority at all.
   external function isValidPath(value: String, hasAuthority: Boolean): Boolean
 
-  /// Whether [value] is a percent-encoded `query`.
+  /// Tells if [value] is a percent-encoded `query`.
   external function isValidQuery(value: String): Boolean
 
-  /// Whether [value] is a percent-encoded `fragment`.
+  /// Tells if [value] is a percent-encoded `fragment`.
   external function isValidFragment(value: String): Boolean
 }
 ----
 <1> All components are stored percent-encoded and are validated
 <2> The percent-decoded components are `fixed`, so they cannot be amended
-<3> URLs can be relative
+<3> Not `hidden`, so the serialized URL is rendered and sent to language bindings along with its components
+<4> URLs can be relative
 
 Examples:
 
@@ -391,8 +390,6 @@ Some helper functions are needed to help build or extract information from URLs.
 external const function encodeUrlComponent(value: String): String // <1>
 
 /// Percent-decodes [value], interpreting the decoded bytes as UTF-8.
-///
-/// The inverse of [encodeUrlComponent()].
 ///
 /// Throws if any `%` in [value] does not begin a percent-encoded octet.
 /// To write a literal `%`, encode it as `%25`.
@@ -474,8 +471,9 @@ When serialized, `net.Url` will be encoded as a `Typed` object (see https://pkl-
 
 The client in the host language will turn the URL into the target language via their respective codec/mapper/unmarshaller.
 
-When decoding, the language has to construct the URL component-wise (using a constructor and using `scheme`, `rawHost`,
-etc. individually).
+The object carries the percent-encoded components (`scheme`, `rawUserInfo`, `rawHost`, `port`, `rawPath`, `rawQuery`
+and `rawFragment`), as well as `stringValue`, the serialized URL.
+When decoding, the language can parse `stringValue` with its own URL parser.
 
 == Compatibility
 
